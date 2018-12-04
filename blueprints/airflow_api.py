@@ -1,17 +1,17 @@
-from datetime import datetime
 import json
-import os
-import six
 import time
-
-from flask import Blueprint, request, Response
-from sqlalchemy import or_
+from datetime import datetime
+from airflow.plugins_manager import AirflowPlugin
+import six
 from airflow import settings
 from airflow.exceptions import AirflowException, AirflowConfigException
 from airflow.models import DagBag, DagRun
-from airflow.utils.state import State
 from airflow.utils.dates import date_range as utils_date_range
+from airflow.utils.state import State
 from airflow.www.app import csrf
+from flask import Blueprint, request, Response
+from sqlalchemy import or_
+from pytz import timezone
 
 airflow_api_blueprint = Blueprint('airflow_api', __name__, url_prefix='/api/v1')
 
@@ -65,6 +65,7 @@ class ApiResponse:
     def server_error(error='An unexpected problem occurred'):
         return ApiResponse.error(ApiResponse.STATUS_SERVER_ERROR, error)
 
+
 @airflow_api_blueprint.before_request
 def verify_authentication():
     authorization = request.headers.get('authorization')
@@ -99,7 +100,8 @@ def find_dag_runs(session, dag_id, dag_run_id, execution_date):
 
 @airflow_api_blueprint.route('/dags', methods=['GET'])
 def dags_index():
-    dagbag = DagBag('dags')
+    dag_home = settings.conf.get('core', 'dags_folder')
+    dagbag = DagBag(dag_home)
     dags = []
     for dag_id in dagbag.dags:
         payload = {
@@ -148,6 +150,7 @@ def get_dag_runs():
 
     return ApiResponse.success({'dag_runs': dag_runs})
 
+
 @csrf.exempt
 @airflow_api_blueprint.route('/dag_runs', methods=['POST'])
 def create_dag_run():
@@ -175,8 +178,9 @@ def create_dag_run():
         partial = True
 
     # ensure there is run data
-    start_date = datetime.now()
-    end_date = datetime.now()
+    local_tz = timezone(settings.conf.get('core','default_timezone'))
+    start_date = local_tz.localize(datetime.now())
+    end_date = local_tz.localize(datetime.now())
 
     if 'start_date' in data and data['start_date'] is not None:
         try:
@@ -216,7 +220,8 @@ def create_dag_run():
     try:
         session = settings.Session()
 
-        dagbag = DagBag('dags')
+        dag_home = settings.conf.get('core', 'dags_folder')
+        dagbag = DagBag(dag_home)
 
         if dag_id not in dagbag.dags:
             return ApiResponse.bad_request("Dag id {} not found".format(dag_id))
@@ -285,3 +290,8 @@ def get_dag_run(dag_run_id):
     session.close()
 
     return ApiResponse.success({'dag_run': format_dag_run(dag_run)})
+
+
+class AirflowApiPlugin(AirflowPlugin):
+    name = "airflow_api"
+    flask_blueprints = [airflow_api_blueprint]
